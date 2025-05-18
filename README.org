@@ -1,0 +1,6 @@
+:PROPERTIES:
+:LAST_MODIFIED: [2025-05-18 Sun 15:51]
+:END:
+#+title: Persistent LRU (plru)
+
+Persistent LRU cache in Emacs. Based on [`pcache`](https://github.com/sigma/pcache).
