@@ -89,21 +89,41 @@
     (maphash (lambda (k v) (push v values)) h)
     values))
 
+(cl-defmethod plru-entry-keys-most-to-least-recent ((cache plru-repository))
+  "Return entries from CACHE in DESCENDING order."
+  (oref cache entry-key-list))
+
+(cl-defmethod plru-entry-keys-least-to-most-recent ((cache plru-repository))
+  "Return entries from CACHE in DESCENDING order."
+  (nreverse (oref cache entry-key-list)))
+
 ;; force custom implementation.
 (cl-defmethod plru-validate-repo ((cache t))
   nil)
 
 (cl-defmethod plru-validate-repo ((cache plru-repository))
-  (and (equal
-        (oref cache version)
-        (oref-default (eieio-object-class cache) version-constant))
-       (listp (oref cache entry-key-list)) (hash-table-p (oref cache entries))
-       (cl-every
-        (function
-         (lambda (entry)
-           (and (object-of-class-p entry (oref cache entry-cls))
-                (plru-validate-entry entry)))))
-       (plru-hash-table-values (oref cache entries))))
+  (and
+   (equal
+    (oref cache version)
+    (oref-default (eieio-object-class cache) version-constant))
+   (listp (oref cache entry-key-list)) (hash-table-p (oref cache entries))
+   (and
+    ;; Assert entries in hash and list match
+    (equal
+     (length (oref cache entry-key-list))
+     (length (hash-table-keys (oref cache entries))))
+    (cl-every
+     (function
+      (lambda (key)
+        (plru-has cache key)))
+     (plru-entry-keys-most-to-least-recent cache)))
+   (cl-every
+    ;; Assert every entry in hash is of expected type
+    (function
+     (lambda (entry)
+       (and (object-of-class-p entry (oref cache entry-cls))
+            (plru-validate-entry entry))))
+    (plru-hash-table-values (oref cache entries)))))
 
 (defclass
   plru-entry ()
@@ -147,7 +167,7 @@
   "Remove the oldest entry from CACHE."
   (let* ((table (oref cache entries))
          (oldest-key (car (last (oref cache entry-key-list)))))
-    (oset cache entry-key-list (butlast (oref cache entry-key-list)))
+    (oset cache :entry-key-list (butlast (oref cache entry-key-list)))
     (remhash oldest-key table)
     (plru-save cache)))
 
@@ -161,24 +181,18 @@
               :value value
               :value-cls
               (and (eieio-object-p value) (eieio-object-class value))))))
-    (message "===")
-    ;; (message "entries: %s" (oref cache entries))
-    ;; (message "entry-key-list: %s" (oref cache entry-key-list))
     (when (plru-full-p cache)
       (plru--remove-oldest cache))
     (if (plru-has cache key)
         (oset cache :entry-key-list (remove key (oref cache entry-key-list)))
       (puthash key entry (oref cache entries)))
     (push key (oref cache entry-key-list))
-    ;; (message "---")
-    (message "entries: %s" (oref cache entries))
-    (message "entry-key-list: %s" (oref cache entry-key-list))
     (plru-save cache)
     entry))
 
 (cl-defmethod plru-invalidate ((cache plru-repository) key)
   (let ((table (oref cache entries)))
-    (oset cache entry-key-list (remove key (oref cache entry-key-list)))
+    (oset cache :entry-key-list (remove key (oref cache entry-key-list)))
     (remhash key table)
     (plru-save cache)))
 
