@@ -32,6 +32,8 @@
 
 (defvar plru-avoid-recursion nil)
 
+(defvar plru-debug nil)
+
 (defconst plru-default-save-delay 300)
 
 (defconst plru-internal-version-constant "0.0")
@@ -84,6 +86,11 @@
           (puthash newname obj *plru-repositories*)
           obj))))
 
+(defun plru-log (log-string &rest args)
+  "When debug active, log LOG-STRING and ARGS."
+  (when plru-debug
+    (apply #'message (concat "[plru] " log-string) args)))
+
 (defun plru-hash-table-values (h)
   (let (values)
     (maphash (lambda (k v) (push v values)) h)
@@ -103,26 +110,64 @@
 
 (cl-defmethod plru-validate-repo ((cache plru-repository))
   (and
-   (equal
-    (oref cache version)
-    (oref-default (eieio-object-class cache) version-constant))
-   (listp (oref cache entry-key-list)) (hash-table-p (oref cache entries))
-   (and
-    ;; Assert entries in hash and list match
+   (or (equal
+        (oref-default (eieio-object-class cache) version-constant)
+        (oref cache version))
+       (not
+        (plru-log
+         "Cache (%s) invalid due to version mismatch: expected %s and got %s"
+         *plru-repository-name*
+         (oref-default (eieio-object-class cache) version-constant)
+         (oref cache version))))
+   (or (listp (oref cache entry-key-list))
+       (not
+        (plru-log "Cache (%s) invalid due to non-list entry-key-list: %s"
+                  *plru-repository-name* (oref cache entry-key-list))))
+   (or (hash-table-p (oref cache entries))
+       (not
+        (plru-log "Cache (%s) invalid due to non-hash-table entries: %s"
+                  *plru-repository-name*
+                  (oref cache entries))))
+   (or
     (equal
      (length (oref cache entry-key-list))
      (length (hash-table-keys (oref cache entries))))
-    (cl-every
-     (function
-      (lambda (key)
-        (plru-has cache key)))
-     (plru-entry-keys-most-to-least-recent cache)))
+    (not
+     (plru-log
+      "Cache (%s) invalid due to discrepancy between entry-key-list (%d) and the keys in entries (%d)."
+      *plru-repository-name*
+      (length (oref cache entry-key-list))
+      (length (hash-table-keys (oref cache entries))))))
    (cl-every
-    ;; Assert every entry in hash is of expected type
+    (function
+     (lambda (key)
+       (if (member key (oref cache entry-key-list))
+           t
+         (plru-log
+          "Cache (%s) invalid due entry-key-list missing key (%s) from entries"
+          *plru-repository-name* key)
+         nil)))
+    (hash-table-keys (oref cache entries)))
+   (cl-every
+    (function
+     (lambda (key)
+       (if (plru-has cache key)
+           t
+         (plru-log
+          "Cache (%s) invalid due entries missing entry for key (%s) from entry-key-list"
+          *plru-repository-name* key)
+         nil)))
+    (plru-entry-keys-most-to-least-recent cache))
+   (cl-every
     (function
      (lambda (entry)
-       (and (object-of-class-p entry (oref cache entry-cls))
-            (plru-validate-entry entry))))
+       (if (and (object-of-class-p entry (oref cache entry-cls))
+                (plru-validate-entry entry))
+           t
+         (plru-log "Cache (%s) invalid entry type: %s"
+                   *plru-repository-name*
+                   entry)
+         nil)))
     (plru-hash-table-values (oref cache entries)))))
 
 (defclass
@@ -153,15 +198,13 @@
   (let* ((default (make-symbol ":nil"))
          (table (oref cache entries))
          (entry (gethash key table default)))
-    (if (or (eq entry default)
-            (not (plru-entry-valid-p entry)))
+    (if (or (eq entry default) (not (plru-entry-valid-p entry)))
         nil
       entry)))
 
 (cl-defmethod plru-full-p ((cache plru-repository))
   "Return non-nil if CACHE is full."
-  (>= (length (hash-table-keys (oref cache entries)))
-      (oref cache max-size)))
+  (>= (length (hash-table-keys (oref cache entries))) (oref cache max-size)))
 
 (cl-defmethod plru--remove-oldest ((cache plru-repository))
   "Remove the oldest entry from CACHE."
